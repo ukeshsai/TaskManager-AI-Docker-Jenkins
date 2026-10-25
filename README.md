@@ -25,3 +25,68 @@ Run `ng e2e` to execute the end-to-end tests via a platform of your choice. To u
 ## Further help
 
 To get more help on the Angular CLI use `ng help` or go check out the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+
+## Spring Boot backend
+
+The `backend/` folder contains the Spring Initializr-generated Maven project for the Task Manager API. It uses Java 21 and includes Spring Web, Spring Data JPA, Validation, and the PostgreSQL driver.
+
+Install a Java 21 JDK and make PostgreSQL available before running the backend directly. The Maven Wrapper is included, so a separate Maven installation is not required. The backend reads `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` from the process environment. `DB_URL` defaults to `jdbc:postgresql://localhost:5432/task_manager`; the username and password must be set. No database credentials are stored in the project.
+
+In PowerShell, set the values for the current terminal session (replace the example username and enter your local database password when prompted):
+
+```powershell
+cd backend
+$env:DB_USERNAME = "your_postgres_username"
+$env:DB_PASSWORD = Read-Host "PostgreSQL password"
+.\mvnw.cmd spring-boot:run
+```
+
+Set `$env:DB_URL` as well if your PostgreSQL host, port, or database name differs from the default. The `task_manager` database must already exist. For local development, Hibernate updates the database schema automatically; use a migration tool rather than this setting for production.
+
+### Run the full stack with Docker Compose
+
+Docker Desktop provides Java, PostgreSQL, and the local AI runtime through containers, so a local Java, PostgreSQL, or Ollama installation is not required. From the repository root, create your local environment file, change its example database password, and start the stack:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+docker compose up --build -d
+```
+
+The Ollama container downloads the configured model (`qwen2.5:1.5b` by default) the first time it starts. The model is stored in a Docker volume and can take several minutes to download; the backend waits for the model download to complete before starting. To choose a different Ollama model, change `OLLAMA_MODEL` in `.env` and restart the stack.
+
+Open [http://localhost:8080](http://localhost:8080). The task assistant runs against Ollama on the private Docker network; the Ollama API is not published on a host port. Chat messages and task changes persist in PostgreSQL. The assistant can propose task creation, edits, or deletions, but it cannot change tasks until you confirm each proposal in the chat.
+
+Follow startup progress with `docker compose logs -f`; stop the services with `docker compose down`. PostgreSQL data and model files persist in named volumes. To also erase the database, all tasks, chat history, and downloaded model, use `docker compose down -v`. The sample database credentials are for local development only; do not use them in a deployed environment.
+
+For step-by-step initial setup, targeted Angular or Spring Boot rebuilds, Ollama model changes, and deployment checks, see [BUILD-DEPLOYMENT.md](./BUILD-DEPLOYMENT.md).
+
+To run Jenkins in Docker and build/deploy through a local Pipeline, see [JENKINS-DEPLOYMENT.md](./JENKINS-DEPLOYMENT.md), [docker-compose.jenkins.yml](./docker-compose.jenkins.yml), and the repository [Jenkinsfile](./Jenkinsfile).
+
+The chat API is under `/api/chat`: create a conversation with `POST /conversations`, list conversations with `GET /conversations`, list messages with `GET /conversations/{id}/messages`, and send a message with `POST /conversations/{id}/messages` using `{"content":"..."}`. Delete a saved conversation and its messages/actions with `DELETE /conversations/{id}`; this does not delete tasks. Read-only task lookups are answered directly from PostgreSQL and do not invoke the model or create task actions. For other messages, the assistant can return proposed actions with `PENDING` status. Apply or decline one using `POST /actions/{actionId}/confirm` or `POST /actions/{actionId}/reject`. A proposal is single-use, and updates/deletions are rejected if the task changed after the proposal was made.
+
+When running Angular with `npm start`, its development-server proxy forwards `/api` requests to `http://localhost:8080`. The Nginx configuration forwards `/api/` to the `backend` Docker service.
+
+### Task API
+
+Once PostgreSQL is configured and the backend is running, the API is available under `/api/tasks`:
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/api/tasks` | List all tasks |
+| `GET` | `/api/tasks/{id}` | Get one task |
+| `POST` | `/api/tasks` | Create a task |
+| `PUT` | `/api/tasks/{id}` | Replace a task's editable fields |
+| `DELETE` | `/api/tasks/{id}` | Delete a task |
+
+Send `title`, `description`, and `completed` as JSON for create and update requests. `title` is required and limited to 200 characters; `description` is limited to 2,000 characters. For example:
+
+```json
+{
+  "title": "Prepare project plan",
+  "description": "List the first API milestones",
+  "completed": false
+}
+```
+
+New tasks receive an ID and UTC `createdAt` timestamp from the backend. A missing task returns `404`, invalid request data returns `400`, successful creation returns `201`, and successful deletion returns `204`.
