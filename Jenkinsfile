@@ -14,6 +14,9 @@ pipeline {
 
     environment {
         COMPOSE_PROJECT_NAME = 'my-angular-app'
+        POSTGRES_DB = "${params.POSTGRES_DB}"
+        POSTGRES_USER = "${params.POSTGRES_USER}"
+        OLLAMA_MODEL = "${params.OLLAMA_MODEL}"
     }
 
     stages {
