@@ -36,6 +36,8 @@ services:
 
   artemis:
     image: apache/activemq-artemis:2.40.0-alpine
+    ports:
+      - "127.0.0.1:8161:8161"
     environment:
       ARTEMIS_USER: ${ARTEMIS_USER:-task_manager}
       ARTEMIS_PASSWORD: ${ARTEMIS_PASSWORD:?Set ARTEMIS_PASSWORD in .env}
