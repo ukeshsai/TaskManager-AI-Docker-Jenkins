@@ -1,5 +1,6 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { fakeAsync, tick } from '@angular/core/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { AppComponent } from './app.component';
 import { ChatAction, ChatConversation, ChatMessage } from './chat.model';
@@ -115,6 +116,61 @@ describe('AppComponent', () => {
       'Start with the most important task.'
     ]);
   });
+
+  it('polls for a queued assistant reply and updates the pending user message', fakeAsync(() => {
+    const fixture = TestBed.createComponent(AppComponent);
+    startApp(fixture, []);
+
+    const component = fixture.componentInstance;
+    component.chatForm.controls.content.setValue('Help me plan my work');
+    component.sendChatMessage();
+    httpTestingController.expectOne(
+      `/api/chat/conversations/${conversation.id}/messages`
+    ).flush({
+      id: 8,
+      role: 'user',
+      content: 'Help me plan my work',
+      createdAt: '2026-10-24T09:01:00Z',
+      processingStatus: 'PROCESSING',
+      processingError: null,
+      actions: []
+    });
+
+    expect(component.hasProcessingChatMessage).toBeTrue();
+    tick(1500);
+    httpTestingController.expectOne(
+      `/api/chat/conversations/${conversation.id}/messages`
+    ).flush([
+      {
+        id: 8,
+        role: 'user',
+        content: 'Help me plan my work',
+        createdAt: '2026-10-24T09:01:00Z',
+        processingStatus: 'COMPLETED',
+        processingError: null,
+        actions: []
+      },
+      {
+        id: 9,
+        role: 'assistant',
+        content: 'Start with your top priority.',
+        createdAt: '2026-10-24T09:01:05Z',
+        processingStatus: null,
+        processingError: null,
+        actions: []
+      }
+    ]);
+
+    expect(component.hasProcessingChatMessage).toBeFalse();
+    expect(component.chatMessages.map(message => message.content)).toEqual([
+      'Help me plan my work',
+      'Start with your top priority.'
+    ]);
+    tick(5000);
+    httpTestingController.expectNone(
+      `/api/chat/conversations/${conversation.id}/messages`
+    );
+  }));
 
   it('applies a proposed task change only after confirmation', () => {
     const fixture = TestBed.createComponent(AppComponent);

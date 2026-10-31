@@ -45,7 +45,7 @@ Set `$env:DB_URL` as well if your PostgreSQL host, port, or database name differ
 
 ### Run the full stack with Docker Compose
 
-Docker Desktop provides Java, PostgreSQL, and the local AI runtime through containers, so a local Java, PostgreSQL, or Ollama installation is not required. From the repository root, create your local environment file, change its example database password, and start the stack:
+Docker Desktop provides Java, PostgreSQL, ActiveMQ Artemis, and the local AI runtime through containers, so local Java, PostgreSQL, Ollama, and Artemis installations are not required. From the repository root, create your local environment file, set private database and broker passwords, and start the stack:
 
 ```powershell
 Copy-Item .env.example .env
@@ -53,17 +53,17 @@ notepad .env
 docker compose up --build -d
 ```
 
-The Ollama container downloads the configured model (`qwen2.5:1.5b` by default) the first time it starts. The model is stored in a Docker volume and can take several minutes to download; the backend waits for the model download to complete before starting. To choose a different Ollama model, change `OLLAMA_MODEL` in `.env` and restart the stack.
+The Ollama container downloads the configured model (`qwen2.5:1.5b` by default) the first time it starts. The model is stored in a Docker volume and can take several minutes to download; the backend waits for Ollama and Artemis to become healthy before starting. To choose a different Ollama model, change `OLLAMA_MODEL` in `.env` and restart the stack. Artemis is available only inside the Compose network and persists its queue data in a Docker volume.
 
 Open [http://localhost:8080](http://localhost:8080). The task assistant runs against Ollama on the private Docker network; the Ollama API is not published on a host port. Chat messages and task changes persist in PostgreSQL. The assistant can propose task creation, edits, or deletions, but it cannot change tasks until you confirm each proposal in the chat.
 
-Follow startup progress with `docker compose logs -f`; stop the services with `docker compose down`. PostgreSQL data and model files persist in named volumes. To also erase the database, all tasks, chat history, and downloaded model, use `docker compose down -v`. The sample database credentials are for local development only; do not use them in a deployed environment.
+Follow startup progress with `docker compose logs -f`; stop the services with `docker compose down`. PostgreSQL data, model files, and Artemis messages persist in named volumes. To also erase the database, all tasks and chat history, downloaded model, and queued messages, use `docker compose down -v`. The sample credentials are for local development only; do not use them in a deployed environment.
 
 For step-by-step initial setup, targeted Angular or Spring Boot rebuilds, Ollama model changes, and deployment checks, see [BUILD-DEPLOYMENT.md](./BUILD-DEPLOYMENT.md).
 
 To run Jenkins in Docker and build/deploy through a local Pipeline, see [JENKINS-DEPLOYMENT.md](./JENKINS-DEPLOYMENT.md), [docker-compose.jenkins.yml](./docker-compose.jenkins.yml), and the repository [Jenkinsfile](./Jenkinsfile).
 
-The chat API is under `/api/chat`: create a conversation with `POST /conversations`, list conversations with `GET /conversations`, list messages with `GET /conversations/{id}/messages`, and send a message with `POST /conversations/{id}/messages` using `{"content":"..."}`. Delete a saved conversation and its messages/actions with `DELETE /conversations/{id}`; this does not delete tasks. Read-only task lookups are answered directly from PostgreSQL and do not invoke the model or create task actions. For other messages, the assistant can return proposed actions with `PENDING` status. Apply or decline one using `POST /actions/{actionId}/confirm` or `POST /actions/{actionId}/reject`. A proposal is single-use, and updates/deletions are rejected if the task changed after the proposal was made.
+The chat API is under `/api/chat`: create a conversation with `POST /conversations`, list conversations with `GET /conversations`, list messages with `GET /conversations/{id}/messages`, and send a message with `POST /conversations/{id}/messages` using `{"content":"..."}`. Read-only task lookups are answered directly from PostgreSQL. Other messages are queued in Artemis for Ollama processing; the UI polls message history until a reply arrives or reports a processing failure. Delete a saved conversation and its messages/actions with `DELETE /conversations/{id}`; this does not delete tasks. The assistant can return proposed actions with `PENDING` status. Apply or decline one using `POST /actions/{actionId}/confirm` or `POST /actions/{actionId}/reject`. A proposal is single-use, and updates/deletions are rejected if the task changed after the proposal was made.
 
 When running Angular with `npm start`, its development-server proxy forwards `/api` requests to `http://localhost:8080`. The Nginx configuration forwards `/api/` to the `backend` Docker service.
 

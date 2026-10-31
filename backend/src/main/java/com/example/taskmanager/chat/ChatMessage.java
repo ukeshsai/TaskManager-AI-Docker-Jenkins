@@ -4,6 +4,8 @@ import java.time.Instant;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -30,6 +32,13 @@ public class ChatMessage {
 
 	@Column(nullable = false, columnDefinition = "text")
 	private String content;
+
+	@Enumerated(EnumType.STRING)
+	@Column(length = 20)
+	private ProcessingStatus processingStatus;
+
+	@Column(columnDefinition = "text")
+	private String processingError;
 
 	@Column(nullable = false, updatable = false)
 	private Instant createdAt;
@@ -64,7 +73,36 @@ public class ChatMessage {
 		return content;
 	}
 
+	public ProcessingStatus getProcessingStatus() {
+		return processingStatus;
+	}
+
+	public String getProcessingError() {
+		return processingError;
+	}
+
 	public Instant getCreatedAt() {
 		return createdAt;
+	}
+
+	public void markProcessing() {
+		processingStatus = ProcessingStatus.PROCESSING;
+		processingError = null;
+	}
+
+	public void markCompleted() {
+		processingStatus = ProcessingStatus.COMPLETED;
+		processingError = null;
+	}
+
+	public void markFailed(String error) {
+		processingStatus = ProcessingStatus.FAILED;
+		processingError = error;
+	}
+
+	public enum ProcessingStatus {
+		PROCESSING,
+		COMPLETED,
+		FAILED
 	}
 }

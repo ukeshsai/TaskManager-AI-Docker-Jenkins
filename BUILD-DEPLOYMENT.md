@@ -1,6 +1,6 @@
 # Build and deployment guide
 
-This project uses Docker Compose to build and run the Angular frontend, Spring Boot API, PostgreSQL database, and Ollama model runtime. Run the commands in this guide from the repository root in PowerShell.
+This project uses Docker Compose to build and run the Angular frontend, Spring Boot API, PostgreSQL database, Ollama model runtime, and ActiveMQ Artemis broker. Run the commands in this guide from the repository root in PowerShell.
 
 ## First-time setup
 
@@ -12,7 +12,9 @@ This project uses Docker Compose to build and run the Angular frontend, Spring B
    notepad .env
    ```
 
-   Keep `.env` private; it is excluded from Git.
+   Set private values for both `POSTGRES_PASSWORD` and `ARTEMIS_PASSWORD`. Keep `.env` private; it is excluded from Git.
+
+   If `.env` already exists, add an `ARTEMIS_USER` and a strong `ARTEMIS_PASSWORD` using the variable names in `.env.example`. Do not replace the existing database values, as they must match the initialized PostgreSQL volume.
 
 3. Build and start the application:
 
@@ -20,7 +22,7 @@ This project uses Docker Compose to build and run the Angular frontend, Spring B
    docker compose up --build -d
    ```
 
-   The first start downloads the configured Ollama model and may take several minutes.
+   The first start downloads the configured Ollama model and may take several minutes. Artemis is also initialized with the broker credentials from `.env`.
 
 4. Check service status and startup logs:
 
@@ -57,7 +59,13 @@ To rebuild and deploy every service:
 docker compose up --build -d
 ```
 
-These commands preserve the PostgreSQL database and downloaded Ollama models. They do not delete the Compose volumes.
+These commands preserve the PostgreSQL database, downloaded Ollama models, and Artemis messages. They do not delete the Compose volumes.
+
+## How chat uses the queue
+
+The Angular app sends messages only to the Spring Boot API. Read-only task lookups are answered directly from PostgreSQL; other chat messages are saved and queued in Artemis. A single Spring listener calls Ollama, then saves the assistant reply and any proposed task actions to PostgreSQL. Angular polls the conversation while that reply is processing. The user must still confirm proposed task changes.
+
+If processing fails, the backend retries the job up to three attempts, moves the failed payload to `chat.requests.dlq`, and marks the chat message as failed with a retry hint. Artemis is private to the Compose network; it is not exposed on a host port.
 
 ## Changing or refreshing the Ollama model
 
@@ -111,7 +119,7 @@ docker compose logs --tail=100 backend
 docker compose logs --tail=100 ollama
 ```
 
-The frontend is available at [http://localhost:8080](http://localhost:8080). PostgreSQL and Ollama are accessible to the other Compose services on the private Docker network and are not published on host ports.
+The frontend is available at [http://localhost:8080](http://localhost:8080). PostgreSQL, Ollama, and Artemis are accessible to other Compose services on the private Docker network and are not published on host ports.
 
 ## Stop and restart
 
@@ -129,8 +137,8 @@ docker compose up -d
 
 ## Data and deployment notes
 
-- PostgreSQL data and Ollama model files are stored in named Docker volumes, so rebuilding containers does not normally erase them.
-- **Do not run `docker compose down -v` unless you intend to permanently delete the database, task and chat history, and downloaded models.**
+- PostgreSQL data, Ollama models, and Artemis queue data are stored in named Docker volumes, so rebuilding containers does not normally erase them.
+- **Do not run `docker compose down -v` unless you intend to permanently delete the database, task and chat history, downloaded models, and queued messages.**
 - The backend currently uses Hibernate `ddl-auto=update` to update the development database schema. For production, use database migrations and back up PostgreSQL before schema changes.
 - `.env.example` contains placeholders, not production credentials. Use strong, private credentials for any shared or production deployment, and do not commit `.env`.
 - To deploy on another Docker host, copy the project files and a securely provisioned `.env` to that host, install Docker with the Compose plugin, then follow the first-time setup steps.

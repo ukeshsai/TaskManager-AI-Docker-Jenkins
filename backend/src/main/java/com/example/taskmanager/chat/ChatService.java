@@ -16,6 +16,7 @@ import com.example.taskmanager.task.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.jms.JmsException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -32,6 +33,7 @@ public class ChatService {
 	private final TaskService taskService;
 	private final TaskQueryResponder taskQueryResponder;
 	private final OllamaChatClient ollamaChatClient;
+	private final ChatQueuePublisher queuePublisher;
 	private final Validator validator;
 
 	public ChatService(
@@ -41,6 +43,7 @@ public class ChatService {
 			TaskService taskService,
 			TaskQueryResponder taskQueryResponder,
 			OllamaChatClient ollamaChatClient,
+			ChatQueuePublisher queuePublisher,
 			Validator validator) {
 		this.conversationRepository = conversationRepository;
 		this.messageRepository = messageRepository;
@@ -48,6 +51,7 @@ public class ChatService {
 		this.taskService = taskService;
 		this.taskQueryResponder = taskQueryResponder;
 		this.ollamaChatClient = ollamaChatClient;
+		this.queuePublisher = queuePublisher;
 		this.validator = validator;
 	}
 
@@ -80,11 +84,20 @@ public class ChatService {
 
 	public ChatMessageResponse sendMessage(UUID conversationId, ChatRequest request) {
 		ChatConversation conversation = requireConversation(conversationId);
+		if (messageRepository.existsByConversationIdAndProcessingStatus(
+				conversationId,
+				ChatMessage.ProcessingStatus.PROCESSING)) {
+			throw new ResponseStatusException(
+					HttpStatus.CONFLICT,
+					"Wait for the current assistant reply before sending another message.");
+		}
+
 		conversation.titleFromFirstMessage(request.content().trim());
 		conversationRepository.save(conversation);
 
-		ChatMessage userMessage = messageRepository.save(
-				new ChatMessage(conversation, "user", request.content().trim()));
+		ChatMessage userMessage = new ChatMessage(conversation, "user", request.content().trim());
+		userMessage.markProcessing();
+		userMessage = messageRepository.save(userMessage);
 
 		List<ChatMessage> history = new ArrayList<>(
 				messageRepository.findTop12ByConversationIdOrderByCreatedAtDesc(conversationId));
@@ -93,25 +106,54 @@ public class ChatService {
 		List<TaskResponse> tasks = taskService.findAll();
 		var queryReply = taskQueryResponder.reply(request.content(), tasks);
 		if (queryReply.isPresent()) {
+			userMessage.markCompleted();
+			messageRepository.save(userMessage);
 			ChatMessage assistantMessage = messageRepository.save(
 					new ChatMessage(conversation, "assistant", queryReply.get()));
 			return ChatMessageResponse.from(assistantMessage, List.of());
 		}
 
-		AssistantOutput output = ollamaChatClient.complete(history, tasks);
+		try {
+			queuePublisher.enqueue(new ChatJob(conversationId, userMessage.getId(), 0));
+		} catch (JmsException | IllegalStateException exception) {
+			logger.error("Could not enqueue chat job {}", userMessage.getId(), exception);
+			userMessage.markFailed("The chat queue is unavailable. Please try sending your message again.");
+			messageRepository.save(userMessage);
+		}
+		return ChatMessageResponse.from(userMessage, List.of());
+	}
+
+	@Transactional
+	public void completeQueuedMessage(Long messageId, AssistantOutput output) {
+		ChatMessage userMessage = messageRepository.findById(messageId)
+				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Chat message not found"));
+		if (userMessage.getProcessingStatus() != ChatMessage.ProcessingStatus.PROCESSING) {
+			return;
+		}
 		if (output.actions().size() > MAX_ACTIONS_PER_REPLY) {
 			logger.warn("The AI proposed more than {} task changes", MAX_ACTIONS_PER_REPLY);
 			throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "The AI proposed too many task changes");
 		}
 
+		ChatConversation conversation = userMessage.getConversation();
 		ChatMessage assistantMessage = messageRepository.save(
 				new ChatMessage(conversation, "assistant", replyFor(output)));
 		List<ChatAction> actions = output.actions().stream()
 				.map(proposal -> createPendingAction(conversation, assistantMessage, proposal))
 				.toList();
 		actionRepository.saveAll(actions);
+		userMessage.markCompleted();
+		messageRepository.save(userMessage);
+	}
 
-		return ChatMessageResponse.from(assistantMessage, actions);
+	@Transactional
+	public void failQueuedMessage(Long messageId, String error) {
+		messageRepository.findById(messageId).ifPresent(message -> {
+			if (message.getProcessingStatus() == ChatMessage.ProcessingStatus.PROCESSING) {
+				message.markFailed(error);
+				messageRepository.save(message);
+			}
+		});
 	}
 
 	private String replyFor(AssistantOutput output) {

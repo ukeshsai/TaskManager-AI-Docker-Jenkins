@@ -10,6 +10,7 @@ pipeline {
         string(name: 'POSTGRES_DB', defaultValue: 'task_manager', description: 'Must match the database used by the existing Compose volume.')
         string(name: 'POSTGRES_USER', defaultValue: 'task_manager', description: 'Must match the user used by the existing Compose volume.')
         string(name: 'OLLAMA_MODEL', defaultValue: 'qwen2.5:1.5b', description: 'Ollama model tag to pull and configure.')
+        string(name: 'ARTEMIS_USER', defaultValue: 'task_manager', description: 'Must match the user configured in the existing Artemis volume.')
     }
 
     environment {
@@ -17,6 +18,7 @@ pipeline {
         POSTGRES_DB = "${params.POSTGRES_DB}"
         POSTGRES_USER = "${params.POSTGRES_USER}"
         OLLAMA_MODEL = "${params.OLLAMA_MODEL}"
+        ARTEMIS_USER = "${params.ARTEMIS_USER}"
     }
 
     stages {
@@ -29,7 +31,10 @@ pipeline {
 
         stage('Validate Compose configuration') {
             steps {
-                withCredentials([string(credentialsId: 'task-manager-postgres-password', variable: 'POSTGRES_PASSWORD')]) {
+                withCredentials([
+                    string(credentialsId: 'task-manager-postgres-password', variable: 'POSTGRES_PASSWORD'),
+                    string(credentialsId: 'task-manager-artemis-password', variable: 'ARTEMIS_PASSWORD')
+                ]) {
                     sh 'docker compose config --quiet'
                 }
             }
@@ -37,7 +42,10 @@ pipeline {
 
         stage('Build application images') {
             steps {
-                withCredentials([string(credentialsId: 'task-manager-postgres-password', variable: 'POSTGRES_PASSWORD')]) {
+                withCredentials([
+                    string(credentialsId: 'task-manager-postgres-password', variable: 'POSTGRES_PASSWORD'),
+                    string(credentialsId: 'task-manager-artemis-password', variable: 'ARTEMIS_PASSWORD')
+                ]) {
                     sh 'docker compose build frontend backend'
                 }
             }
@@ -45,7 +53,10 @@ pipeline {
 
         stage('Deploy with Docker Compose') {
             steps {
-                withCredentials([string(credentialsId: 'task-manager-postgres-password', variable: 'POSTGRES_PASSWORD')]) {
+                withCredentials([
+                    string(credentialsId: 'task-manager-postgres-password', variable: 'POSTGRES_PASSWORD'),
+                    string(credentialsId: 'task-manager-artemis-password', variable: 'ARTEMIS_PASSWORD')
+                ]) {
                     sh 'docker compose up -d --no-build'
                 }
             }

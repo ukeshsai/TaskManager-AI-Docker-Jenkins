@@ -26,6 +26,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  processingStatus?: 'PROCESSING' | 'COMPLETED' | 'FAILED' | null;
+  processingError?: string | null;
   actions: ChatAction[];
 }
 

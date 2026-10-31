@@ -34,6 +34,21 @@ services:
       retries: 60
       start_period: 10s
 
+  artemis:
+    image: apache/activemq-artemis:2.40.0-alpine
+    environment:
+      ARTEMIS_USER: ${ARTEMIS_USER:-task_manager}
+      ARTEMIS_PASSWORD: ${ARTEMIS_PASSWORD:?Set ARTEMIS_PASSWORD in .env}
+      ANONYMOUS_LOGIN: "false"
+    volumes:
+      - artemis_data:/var/lib/artemis-instance
+    healthcheck:
+      test: ["CMD-SHELL", "/var/lib/artemis-instance/bin/artemis check node --user \"$${ARTEMIS_USER}\" --password \"$${ARTEMIS_PASSWORD}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   backend:
     build:
       context: ./backend
@@ -43,10 +58,15 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      ARTEMIS_BROKER_URL: tcp://artemis:61616
+      ARTEMIS_USER: ${ARTEMIS_USER:-task_manager}
+      ARTEMIS_PASSWORD: ${ARTEMIS_PASSWORD:?Set ARTEMIS_PASSWORD in .env}
     depends_on:
       db:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+      artemis:
         condition: service_healthy
 
   frontend:
@@ -60,3 +80,4 @@ services:
 volumes:
   postgres_data:
   ollama_data:
+  artemis_data:

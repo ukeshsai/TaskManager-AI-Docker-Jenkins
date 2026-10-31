@@ -1,7 +1,7 @@
 import { DatePipe } from '@angular/common';
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnDestroy, OnInit, inject } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { finalize } from 'rxjs';
+import { EMPTY, Subscription, catchError, finalize, switchMap, takeWhile, tap, timer } from 'rxjs';
 import { ChatAction, ChatConversation, ChatMessage } from './chat.model';
 import { ChatService } from './chat.service';
 import { Task, TaskRequest } from './task.model';
@@ -14,7 +14,7 @@ import { TaskService } from './task.service';
   templateUrl: './app.component.html',
   styleUrl: './app.component.css'
 })
-export class AppComponent implements OnInit {
+export class AppComponent implements OnInit, OnDestroy {
   private readonly formBuilder = inject(FormBuilder);
   private readonly taskService = inject(TaskService);
   private readonly chatService = inject(ChatService);
@@ -44,10 +44,19 @@ export class AppComponent implements OnInit {
   errorMessage = '';
   chatErrorMessage = '';
   readonly today = new Date();
+  private chatPollingSubscription: Subscription | null = null;
+
+  get hasProcessingChatMessage(): boolean {
+    return this.chatMessages.some(message => message.processingStatus === 'PROCESSING');
+  }
 
   ngOnInit(): void {
     this.loadTasks();
     this.loadConversations();
+  }
+
+  ngOnDestroy(): void {
+    this.stopPollingMessages();
   }
 
   loadTasks(): void {
@@ -167,6 +176,7 @@ export class AppComponent implements OnInit {
       return;
     }
 
+    this.stopPollingMessages();
     this.creatingConversation = true;
     this.chatErrorMessage = '';
     this.chatService.createConversation()
@@ -210,6 +220,7 @@ export class AppComponent implements OnInit {
   }
 
   selectConversation(conversationId: string): void {
+    this.stopPollingMessages();
     this.selectedConversationId = conversationId;
     this.chatLoading = true;
     this.chatErrorMessage = '';
@@ -219,6 +230,9 @@ export class AppComponent implements OnInit {
         next: messages => {
           if (this.selectedConversationId === conversationId) {
             this.chatMessages = messages;
+            if (messages.some(message => message.processingStatus === 'PROCESSING')) {
+              this.pollMessages(conversationId);
+            }
           }
         },
         error: () => {
@@ -232,13 +246,14 @@ export class AppComponent implements OnInit {
   sendChatMessage(): void {
     const content = this.chatForm.controls.content.value.trim();
     const conversationId = this.selectedConversationId;
-    if (!content || !conversationId || this.sendingMessage) {
+    if (!content || !conversationId || this.sendingMessage || this.hasProcessingChatMessage) {
       this.chatForm.controls.content.markAsTouched();
       return;
     }
 
+    const optimisticMessageId = -Date.now();
     const userMessage: ChatMessage = {
-      id: -Date.now(),
+      id: optimisticMessageId,
       role: 'user',
       content,
       createdAt: new Date().toISOString(),
@@ -253,7 +268,16 @@ export class AppComponent implements OnInit {
       .subscribe({
         next: message => {
           if (this.selectedConversationId === conversationId) {
-            this.chatMessages = [...this.chatMessages, message];
+            if (message.role === 'user') {
+              this.chatMessages = this.chatMessages.map(currentMessage =>
+                currentMessage.id === optimisticMessageId ? message : currentMessage
+              );
+              if (message.processingStatus === 'PROCESSING') {
+                this.pollMessages(conversationId);
+              }
+            } else {
+              this.chatMessages = [...this.chatMessages, message];
+            }
           }
           this.refreshConversationTitle(conversationId, content);
         },
@@ -263,6 +287,34 @@ export class AppComponent implements OnInit {
           }
         }
       });
+  }
+
+  private pollMessages(conversationId: string): void {
+    this.stopPollingMessages();
+    this.chatPollingSubscription = timer(1500, 2000).pipe(
+      switchMap(() => this.chatService.getMessages(conversationId).pipe(
+        catchError(() => {
+          if (this.selectedConversationId === conversationId) {
+            this.chatErrorMessage = 'Could not refresh the assistant response. Retrying...';
+          }
+          return EMPTY;
+        })
+      )),
+      tap(messages => {
+        if (this.selectedConversationId === conversationId) {
+          this.chatMessages = messages;
+          if (!messages.some(message => message.processingStatus === 'PROCESSING')) {
+            this.chatErrorMessage = '';
+          }
+        }
+      }),
+      takeWhile(messages => messages.some(message => message.processingStatus === 'PROCESSING'), true)
+    ).subscribe();
+  }
+
+  private stopPollingMessages(): void {
+    this.chatPollingSubscription?.unsubscribe();
+    this.chatPollingSubscription = null;
   }
 
   resolveAction(message: ChatMessage, action: ChatAction, confirm: boolean): void {

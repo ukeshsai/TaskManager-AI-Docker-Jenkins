@@ -583,6 +583,21 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.message-processing,
+.message-processing-error {
+  margin: 5px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.message-processing {
+  color: #718174;
+}
+
+.message-processing-error {
+  color: #a53d36;
+}
+
 .user-message .message-speaker {
   display: none;
 }

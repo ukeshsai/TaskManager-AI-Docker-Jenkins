@@ -8,6 +8,8 @@ public record ChatMessageResponse(
 		String role,
 		String content,
 		Instant createdAt,
+		ChatMessage.ProcessingStatus processingStatus,
+		String processingError,
 		List<ChatActionResponse> actions) {
 
 	public static ChatMessageResponse from(ChatMessage message, List<ChatAction> actions) {
@@ -16,6 +18,8 @@ public record ChatMessageResponse(
 				message.getRole(),
 				message.getContent(),
 				message.getCreatedAt(),
+				message.getProcessingStatus(),
+				message.getProcessingError(),
 				actions.stream().map(ChatActionResponse::from).toList());
 	}
 }
