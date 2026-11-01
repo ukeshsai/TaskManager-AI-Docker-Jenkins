@@ -14,7 +14,7 @@ pipeline {
     }
 
     environment {
-        COMPOSE_PROJECT_NAME = 'my-angular-app'
+        COMPOSE_PROJECT_NAME = 'taskmanager-ai-docker-jenkins'
         POSTGRES_DB = "${params.POSTGRES_DB}"
         POSTGRES_USER = "${params.POSTGRES_USER}"
         OLLAMA_MODEL = "${params.OLLAMA_MODEL}"
