@@ -17,6 +17,7 @@ services:
     image: ollama/ollama:latest
     environment:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -58,14 +59,31 @@ services:
       DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
       DB_USERNAME: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
       ARTEMIS_BROKER_URL: tcp://artemis:61616
       ARTEMIS_USER: ${ARTEMIS_USER:-task_manager}
       ARTEMIS_PASSWORD: ${ARTEMIS_PASSWORD:?Set ARTEMIS_PASSWORD in .env}
+      CHAT_QUEUE: chat.requests
+      CHAT_RESULT_QUEUE: ai.responses.task-manager
+      CHAT_RESULT_DEAD_LETTER_QUEUE: ai.responses.task-manager.dlq
     depends_on:
       db:
         condition: service_healthy
+      artemis:
+        condition: service_healthy
+
+  ai-worker:
+    build:
+      context: ./ai-worker
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      AI_TIME_ZONE: ${AI_TIME_ZONE:-Asia/Kolkata}
+      ARTEMIS_BROKER_URL: tcp://artemis:61616
+      ARTEMIS_USER: ${ARTEMIS_USER:-task_manager}
+      ARTEMIS_PASSWORD: ${ARTEMIS_PASSWORD:?Set ARTEMIS_PASSWORD in .env}
+      CHAT_QUEUE: chat.requests
+      CHAT_DEAD_LETTER_QUEUE: chat.requests.dlq
+    depends_on:
       ollama:
         condition: service_healthy
       artemis:

@@ -45,7 +45,7 @@ Set `$env:DB_URL` as well if your PostgreSQL host, port, or database name differ
 
 ### Run the full stack with Docker Compose
 
-Docker Desktop provides Java, PostgreSQL, ActiveMQ Artemis, and the local AI runtime through containers, so local Java, PostgreSQL, Ollama, and Artemis installations are not required. From the repository root, create your local environment file, set private database and broker passwords, and start the stack:
+Docker Desktop provides Java, PostgreSQL, ActiveMQ Artemis, a separate AI worker, and the local AI runtime through containers, so local Java, PostgreSQL, Ollama, and Artemis installations are not required. From the repository root, create your local environment file, set private database and broker passwords, and start the stack:
 
 ```powershell
 Copy-Item .env.example .env
@@ -53,7 +53,7 @@ notepad .env
 docker compose up --build -d
 ```
 
-The Ollama container downloads the configured model (`qwen2.5:1.5b` by default) the first time it starts. The model is stored in a Docker volume and can take several minutes to download; the backend waits for Ollama and Artemis to become healthy before starting. To choose a different Ollama model, change `OLLAMA_MODEL` in `.env` and restart the stack. Artemis is available only inside the Compose network and persists its queue data in a Docker volume.
+The Ollama container downloads the configured model (`qwen2.5:1.5b` by default) the first time it starts. The model is stored in a Docker volume and can take several minutes to download. The backend communicates with the separate `ai-worker` only through Artemis queues; the worker calls Ollama privately over the Compose network. Artemis and Ollama are not published as application ports. The worker consumes one AI job at a time, and `OLLAMA_NUM_PARALLEL=1` limits Ollama's parallel model requests. These settings reduce concurrent CPU load but do not cap CPU usage for one inference. The worker also adds the current date and time to prompts using `AI_TIME_ZONE` (defaults to `Asia/Kolkata`); see [BUILD-DEPLOYMENT.md](./BUILD-DEPLOYMENT.md#current-date-and-time-in-ai-prompts) to configure it. To choose a different Ollama model, change `OLLAMA_MODEL` in `.env` and restart the stack. Artemis is available only inside the Compose network and persists its queue data in a Docker volume.
 
 Open [http://localhost:8080](http://localhost:8080). The task assistant runs against Ollama on the private Docker network; the Ollama API is not published on a host port. Chat messages and task changes persist in PostgreSQL. The assistant can propose task creation, edits, or deletions, but it cannot change tasks until you confirm each proposal in the chat.
 
@@ -63,7 +63,7 @@ For step-by-step initial setup, targeted Angular or Spring Boot rebuilds, Ollama
 
 To run Jenkins in Docker and build/deploy through a local Pipeline, see [JENKINS-DEPLOYMENT.md](./JENKINS-DEPLOYMENT.md), [docker-compose.jenkins.yml](./docker-compose.jenkins.yml), and the repository [Jenkinsfile](./Jenkinsfile).
 
-The chat API is under `/api/chat`: create a conversation with `POST /conversations`, list conversations with `GET /conversations`, list messages with `GET /conversations/{id}/messages`, and send a message with `POST /conversations/{id}/messages` using `{"content":"..."}`. Read-only task lookups are answered directly from PostgreSQL. Other messages are queued in Artemis for Ollama processing; the UI polls message history until a reply arrives or reports a processing failure. Delete a saved conversation and its messages/actions with `DELETE /conversations/{id}`; this does not delete tasks. The assistant can return proposed actions with `PENDING` status. Apply or decline one using `POST /actions/{actionId}/confirm` or `POST /actions/{actionId}/reject`. A proposal is single-use, and updates/deletions are rejected if the task changed after the proposal was made.
+The chat API is under `/api/chat`: create a conversation with `POST /conversations`, list conversations with `GET /conversations`, list messages with `GET /conversations/{id}/messages`, and send a message with `POST /conversations/{id}/messages` using `{"content":"..."}`. Read-only task lookups are answered directly from PostgreSQL. Other messages are queued in Artemis for the separate AI worker; the worker sends its reply back through a caller-specific result queue, and the UI polls message history until a reply arrives or reports a processing failure. No caller sends AI requests to the worker over HTTP. Other services can publish generic prompt jobs to the same MQ request queue and use their own `ai.responses.<service>` reply queue; see [BUILD-DEPLOYMENT.md](./BUILD-DEPLOYMENT.md#sending-a-job-from-another-service). Delete a saved conversation and its messages/actions with `DELETE /conversations/{id}`; this does not delete tasks. The assistant can return proposed actions with `PENDING` status. Apply or decline one using `POST /actions/{actionId}/confirm` or `POST /actions/{actionId}/reject`. A proposal is single-use, and updates/deletions are rejected if the task changed after the proposal was made.
 
 When running Angular with `npm start`, its development-server proxy forwards `/api` requests to `http://localhost:8080`. The Nginx configuration forwards `/api/` to the `backend` Docker service.
 

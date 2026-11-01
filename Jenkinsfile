@@ -46,7 +46,7 @@ pipeline {
                     string(credentialsId: 'task-manager-postgres-password', variable: 'POSTGRES_PASSWORD'),
                     string(credentialsId: 'task-manager-artemis-password', variable: 'ARTEMIS_PASSWORD')
                 ]) {
-                    sh 'docker compose build frontend backend'
+                    sh 'docker compose build frontend backend ai-worker'
                 }
             }
         }
@@ -75,6 +75,13 @@ pipeline {
                         fi
                         sleep 5
                     done
+                '''
+                sh '''
+                    set -eu
+                    if ! docker compose ps --status running --services ai-worker | grep -q '^ai-worker$'; then
+                        docker compose logs --tail=100 ai-worker
+                        exit 1
+                    fi
                 '''
                 sh 'docker compose ps'
             }

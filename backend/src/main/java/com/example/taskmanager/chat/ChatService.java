@@ -3,18 +3,18 @@ package com.example.taskmanager.chat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import jakarta.validation.Validator;
 
-import com.example.taskmanager.chat.OllamaChatClient.ActionProposal;
-import com.example.taskmanager.chat.OllamaChatClient.AssistantOutput;
 import com.example.taskmanager.task.TaskRequest;
 import com.example.taskmanager.task.TaskResponse;
 import com.example.taskmanager.task.TaskService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jms.JmsException;
 import org.springframework.stereotype.Service;
@@ -32,9 +32,10 @@ public class ChatService {
 	private final ChatActionRepository actionRepository;
 	private final TaskService taskService;
 	private final TaskQueryResponder taskQueryResponder;
-	private final OllamaChatClient ollamaChatClient;
+	private final ChatPromptFactory promptFactory;
 	private final ChatQueuePublisher queuePublisher;
 	private final Validator validator;
+	private final String resultQueue;
 
 	public ChatService(
 			ChatConversationRepository conversationRepository,
@@ -42,17 +43,19 @@ public class ChatService {
 			ChatActionRepository actionRepository,
 			TaskService taskService,
 			TaskQueryResponder taskQueryResponder,
-			OllamaChatClient ollamaChatClient,
+			ChatPromptFactory promptFactory,
 			ChatQueuePublisher queuePublisher,
-			Validator validator) {
+			Validator validator,
+			@Value("${app.chat.result-queue}") String resultQueue) {
 		this.conversationRepository = conversationRepository;
 		this.messageRepository = messageRepository;
 		this.actionRepository = actionRepository;
 		this.taskService = taskService;
 		this.taskQueryResponder = taskQueryResponder;
-		this.ollamaChatClient = ollamaChatClient;
+		this.promptFactory = promptFactory;
 		this.queuePublisher = queuePublisher;
 		this.validator = validator;
+		this.resultQueue = resultQueue;
 	}
 
 	public ChatConversationResponse createConversation() {
@@ -114,7 +117,19 @@ public class ChatService {
 		}
 
 		try {
-			queuePublisher.enqueue(new ChatJob(conversationId, userMessage.getId(), 0));
+			List<ChatPromptMessage> promptHistory = history.stream()
+					.map(message -> new ChatPromptMessage(message.getRole(), message.getContent()))
+					.toList();
+			queuePublisher.enqueue(new ChatJob(
+					UUID.randomUUID(),
+					0,
+					resultQueue,
+					promptFactory.buildSystemPrompt(tasks),
+					promptHistory,
+					promptFactory.responseSchema(),
+					Map.of(
+							"conversationId", conversationId.toString(),
+							"messageId", userMessage.getId().toString())));
 		} catch (JmsException | IllegalStateException exception) {
 			logger.error("Could not enqueue chat job {}", userMessage.getId(), exception);
 			userMessage.markFailed("The chat queue is unavailable. Please try sending your message again.");
@@ -124,8 +139,16 @@ public class ChatService {
 	}
 
 	@Transactional
-	public void completeQueuedMessage(Long messageId, AssistantOutput output) {
-		ChatMessage userMessage = messageRepository.findById(messageId)
+	public void completeQueuedMessage(
+			UUID conversationId,
+			Long messageId,
+			ChatAssistantOutput output) {
+		if (output.reply() == null || output.reply().isBlank() || output.actions() == null) {
+			throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "The AI worker returned an invalid response");
+		}
+		ChatMessage userMessage = messageRepository.findByIdAndConversationId(
+						messageId,
+						conversationId)
 				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Chat message not found"));
 		if (userMessage.getProcessingStatus() != ChatMessage.ProcessingStatus.PROCESSING) {
 			return;
@@ -147,8 +170,8 @@ public class ChatService {
 	}
 
 	@Transactional
-	public void failQueuedMessage(Long messageId, String error) {
-		messageRepository.findById(messageId).ifPresent(message -> {
+	public void failQueuedMessage(UUID conversationId, Long messageId, String error) {
+		messageRepository.findByIdAndConversationId(messageId, conversationId).ifPresent(message -> {
 			if (message.getProcessingStatus() == ChatMessage.ProcessingStatus.PROCESSING) {
 				message.markFailed(error);
 				messageRepository.save(message);
@@ -156,7 +179,7 @@ public class ChatService {
 		});
 	}
 
-	private String replyFor(AssistantOutput output) {
+	private String replyFor(ChatAssistantOutput output) {
 		if (output.actions().isEmpty()) {
 			return output.reply().trim();
 		}
@@ -169,7 +192,7 @@ public class ChatService {
 	private ChatAction createPendingAction(
 			ChatConversation conversation,
 			ChatMessage message,
-			ActionProposal proposal) {
+			ChatJobAction proposal) {
 		if (proposal.type() == null) {
 			throw invalidModelAction("missing action type");
 		}
@@ -184,7 +207,7 @@ public class ChatService {
 	private ChatAction createTaskProposal(
 			ChatConversation conversation,
 			ChatMessage message,
-			ActionProposal proposal) {
+			ChatJobAction proposal) {
 		TaskRequest request = new TaskRequest(
 				proposal.title(),
 				proposal.description(),
@@ -206,7 +229,7 @@ public class ChatService {
 	private ChatAction updateTaskProposal(
 			ChatConversation conversation,
 			ChatMessage message,
-			ActionProposal proposal) {
+			ChatJobAction proposal) {
 		if (proposal.taskId() == null) {
 			throw invalidModelAction("update action did not include a task ID");
 		}
@@ -235,7 +258,7 @@ public class ChatService {
 	private ChatAction deleteTaskProposal(
 			ChatConversation conversation,
 			ChatMessage message,
-			ActionProposal proposal) {
+			ChatJobAction proposal) {
 		if (proposal.taskId() == null) {
 			throw invalidModelAction("delete action did not include a task ID");
 		}

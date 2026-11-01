@@ -49,19 +49,19 @@ The Jenkinsfile uses `agent any`; no Windows Jenkins agent or extra agent contai
 
 1. Checks Docker Engine and Compose availability inside Jenkins.
 2. Validates the Compose configuration using Jenkins' PostgreSQL and Artemis password credentials.
-3. Builds the Angular frontend and Spring Boot backend Docker images.
+3. Builds the Angular frontend, Spring Boot backend, and AI-worker Docker images.
 4. Deploys the application with Docker Compose.
-5. Checks the task API from the frontend container, retrying for up to 10 minutes.
+5. Checks the task API from the frontend container, retrying for up to 10 minutes, and confirms the AI-worker container is running.
 
 The pipeline accepts `POSTGRES_DB`, `POSTGRES_USER`, `OLLAMA_MODEL`, and `ARTEMIS_USER` parameters. The database name/user and Artemis user must match the values used when their persistent volumes were initialized. `OLLAMA_MODEL` defaults to `qwen2.5:1.5b`; selecting another tag causes Ollama to pull it into its persistent model volume.
 
-The Compose project name for the application is fixed to `my-angular-app`, matching the existing local stack. This keeps the existing PostgreSQL, Ollama, and Artemis volumes in use. Do not run competing manual deployments while Jenkins is deploying.
+The Compose project name for the application is fixed to `taskmanager-ai-docker-jenkins`, matching the existing local stack. This keeps the existing PostgreSQL, Ollama, and Artemis volumes in use. Do not run competing manual deployments while Jenkins is deploying.
 
-The pipeline does not run Angular unit tests or backend JUnit tests yet. The current backend Dockerfile packages with `-DskipTests`; Angular production compilation is checked during the frontend image build.
+The pipeline does not run Angular unit tests or backend/worker JUnit tests yet. The backend and AI-worker Dockerfiles package with `-DskipTests`; Angular production compilation is checked during the frontend image build. Deployment verification checks the API response and that the AI-worker container is running.
 
 ## App and Jenkins lifecycle
 
-The application remains available at [http://localhost:8080](http://localhost:8080); Jenkins is at [http://localhost:8081](http://localhost:8081). ActiveMQ Artemis runs inside Docker on the private Compose network and is not published to a host port.
+The application remains available at [http://localhost:8080](http://localhost:8080); Jenkins is at [http://localhost:8081](http://localhost:8081). ActiveMQ Artemis, Ollama, and the AI worker run inside Docker on the private Compose network. The worker has no HTTP API/host-published port; AI requests and replies use Artemis queues.
 
 Stop Jenkins without deleting its configuration or jobs:
 

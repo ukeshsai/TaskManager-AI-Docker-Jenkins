@@ -201,9 +201,9 @@
         </div>
         <div class="subflow">
           <strong>Chat-only supporting services:</strong>
-          Spring Boot puts longer AI work in <code>ActiveMQ Artemis</code> → a backend listener processes the queued job → <code>Ollama</code> generates a reply on the local Docker network → Spring saves the result in PostgreSQL. The browser asks the API for updates while the job runs.
+          Spring Boot puts longer AI work in <code>ActiveMQ Artemis</code> → the separate <code>ai-worker</code> consumes a generic prompt job and calls <code>Ollama</code> privately → the worker publishes a correlated result to the caller's reply queue → Spring saves the task-chat result in PostgreSQL. The browser asks the API for updates while the job runs.
         </div>
-        <p>These are separate processes, but they work as one application. The browser does <em>not</em> connect directly to PostgreSQL, Artemis, or Ollama; it communicates with the API.</p>
+        <p>These are separate processes, but they work as one application. The browser does <em>not</em> connect directly to PostgreSQL, Artemis, Ollama, or the AI worker; it communicates with the API. The AI worker has no generation HTTP endpoint: service-to-worker AI requests use MQ.</p>
       </section>
 
       <section id="frontend">
@@ -257,8 +257,8 @@
           <li>The browser sends a message to <code>POST /api/chat/conversations/{id}/messages</code>. The API saves the user's message as <code>PROCESSING</code>.</li>
           <li>For a recognizable read-only task question (for example, asking which tasks are unfinished), <code>TaskQueryResponder</code> can answer directly from the current task list without calling the model.</li>
           <li>Other messages are published to the Artemis queue. The API returns the processing message to the browser so the UI can stay responsive.</li>
-          <li><code>ChatJobListener</code> receives the queued job. <code>ChatJobProcessor</code> loads recent conversation history and the current tasks, then calls <code>OllamaChatClient</code>.</li>
-          <li>Ollama returns a structured reply and, when needed, proposed task actions. The backend saves the assistant reply and proposals. Angular polls message history until processing is finished.</li>
+          <li>The backend builds a prompt from recent conversation history and the current tasks, then sends a generic job containing messages, a response schema, a reply-queue name, and caller metadata. The separate <code>ai-worker</code> consumes it from Artemis and calls Ollama; the worker does not connect to PostgreSQL or know task-specific rules.</li>
+          <li>Ollama returns content matching the supplied schema. The worker publishes that content with the correlation ID and metadata to the requested reply queue. The backend consumes the result, validates and saves the assistant reply and proposals. Angular polls message history until processing is finished.</li>
         </ol>
         <div class="callout">
           <strong>The assistant cannot silently change your task list.</strong>
@@ -267,7 +267,9 @@
         <div class="card">
           <h3>Why proposals can be rejected</h3>
           <p>For an update or deletion, the backend compares the task with the snapshot recorded when the proposal was created. If someone changed that task in the meantime, confirmation returns a conflict rather than overwriting newer data. A proposal can also be resolved only once.</p>
-          <p>If model processing fails, the listener retries the job up to three attempts; a job that still fails is moved to the dead-letter queue and the message is marked failed so the UI can show an error.</p>
+          <p>If model processing fails, the worker retries the job up to three attempts; a job that still fails is moved to the request dead-letter queue and a failure result lets the backend mark the chat message failed so the UI can show an error. The worker processes one job at a time, and Ollama's parallel-request setting defaults to one. This reduces concurrent load but does not cap the CPU used by one inference.</p>
+          <p>Before sending a prompt to Ollama, the worker adds the current weekday, date, time, timezone, and UTC offset. The default timezone is <code>Asia/Kolkata</code>; change it with <code>AI_TIME_ZONE</code>. This gives the model a fresh reference for basic date/time questions, though it does not make model-generated date arithmetic guaranteed.</p>
+          <p>Future services can publish their own prompt jobs to the same request queue and choose an <code>ai.responses.&lt;service&gt;</code> reply queue. The worker only accepts MQ jobs and has no HTTP generation port.</p>
         </div>
       </section>
 
@@ -285,7 +287,7 @@ Repository  — reads/writes entities through JPA
     ↓
 PostgreSQL  — persists the data</pre>
         <p>The task code lives under <code>backend/src/main/java/com/example/taskmanager/task</code>. Chat code is under the neighboring <code>chat</code> package. Spring discovers components such as controllers, services, and repositories from the main application package.</p>
-        <p>Chat conversations, chat messages, and proposed actions have their own entities and repositories. Their records are stored in the same PostgreSQL database as tasks, so a reply and its action proposals can be loaded again later.</p>
+        <p>Chat conversations, chat messages, and proposed actions have their own entities and repositories. Their records are stored in the same PostgreSQL database as tasks, so a reply and its action proposals can be loaded again later. Only the core backend accesses PostgreSQL; the AI worker receives generic prompt data and returns generated content without needing to know about tasks or databases.</p>
         <p>Database connection, model URL/name, broker connection, and queue names are configured in <code>backend/src/main/resources/application.properties</code> and supplied through environment variables in Docker Compose. Keep real passwords in a private local <code>.env</code> file or a CI credentials store, not in source code.</p>
       </section>
 
@@ -320,7 +322,8 @@ docker compose up --build -d</pre>
           <tbody>
             <tr><td><code>src/app/</code></td><td>Angular screen, task/chat services, and TypeScript data models</td></tr>
             <tr><td><code>backend/src/main/java/.../task/</code></td><td>Task entity, API controller, service, repository, and request/response types</td></tr>
-            <tr><td><code>backend/src/main/java/.../chat/</code></td><td>Chat API, persistence, queue worker, model client, and action approval logic</td></tr>
+            <tr><td><code>backend/src/main/java/.../chat/</code></td><td>Chat API, persistence, MQ publishing/result handling, and action approval logic</td></tr>
+            <tr><td><code>ai-worker/</code></td><td>Generic MQ-only prompt worker, Ollama client, independent Docker image, and worker tests</td></tr>
             <tr><td><code>backend/src/test/</code></td><td>Backend unit/integration tests</td></tr>
             <tr><td><code>public/</code></td><td>Static files copied into the Angular build (including this walkthrough)</td></tr>
             <tr><td><code>docker-compose.yml</code></td><td>Application services, their connections, health checks, and persistent volumes</td></tr>
