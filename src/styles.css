@@ -92,6 +92,16 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
+.topbar-note-link {
+  text-decoration: none;
+}
+
+.topbar-note-link:hover {
+  color: var(--green-dark);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .workspace {
   width: min(100% - 36px, 780px);
   margin: 0 auto;
